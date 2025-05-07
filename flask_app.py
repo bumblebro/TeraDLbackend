@@ -1,5 +1,6 @@
 #--> Standard module & library
 import json
+import os
 
 #--> Flask
 from flask import Flask, Response, request
@@ -114,7 +115,8 @@ def getLink() -> Response:
 
 #--> Initialization
 if __name__ == '__main__':
-    app.run(debug=True)
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port)
 
 # https://1024terabox.com/s/1eBHBOzcEI-VpUGA_xIcGQg
 # https://dm.terabox.com/indonesian/sharing/link?surl=KKG3LQ7jaT733og97CBcGg
