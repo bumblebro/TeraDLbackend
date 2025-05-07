@@ -17,7 +17,7 @@ from python.terabox3 import TeraboxFile as TF3, TeraboxLink as TL3
 default_mode = 3
 config : dict[str,any] = {
     'status'  : 'failed',
-    'message' : 'cookie terabox nya invalid bos, coba lapor ke dapunta',
+    'message' : 'The Terabox cookie is invalid, boss. Try reporting it to Me.',
     'mode'    : default_mode,
     'cookie'  : ''
 }
@@ -50,7 +50,7 @@ def stream() -> Response:
                     'mode3' : ['mode', 'shareid', 'uk', 'sign', 'timestamp', 'fs_id'],
                 },
                 'response' : ['status', 'download_link']}],
-        'message' : 'hayo mau ngapain?'}
+        'message' : 'Come on, what do you want to do?'}
     return Response(response=json.dumps(obj=response, sort_keys=False), mimetype='application/json')
 
 #--> Get Config App
@@ -62,7 +62,7 @@ def getConfig() -> Response:
         x.generateCookie()
         x.generateAuth()
         log = x.isLogin
-        config = {'status':'success', **x.data} if log else {'status':'failed', 'message':'cookie terabox nya invalid bos, coba lapor ke dapunta', 'mode':default_mode, 'cookie':''}
+        config = {'status':'success', **x.data} if log else {'status':'failed', 'message':'The Terabox cookie is invalid, boss. Try reporting it to Me.', 'mode':default_mode, 'cookie':''}
     except Exception as e:
         config = {'status':'failed', 'message':'i dont know why error in config.json : {}'.format(str(e)), 'mode':default_mode, 'cookie':''}
     return Response(response=json.dumps(obj=config, sort_keys=False), mimetype='application/json')
@@ -108,14 +108,14 @@ def getLink() -> Response:
             if all(key in data for key in required_keys):
                 TL = TL3(**{key: data[key] for key in required_keys})
                 TL.generate()
-        else : result = {'status':'failed', 'message':'gaada mode nya'}
+        else : result = {'status':'failed', 'message':'there is no mode'}
         result = TL.result
     except: result = {'status':'failed', 'message':'wrong payload'}
     return Response(response=json.dumps(obj=result, sort_keys=False), mimetype='application/json')
 
 #--> Initialization
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
+    port = int(os.environ.get('PORT', 5001))
     app.run(host='0.0.0.0', port=port)
 
 # https://1024terabox.com/s/1eBHBOzcEI-VpUGA_xIcGQg
