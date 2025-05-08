@@ -1,7 +1,18 @@
 import re, requests, hashlib, time
+import logging
 from urllib.parse import quote
 
-headers : dict[str, str] = {'user-agent':'Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36'}
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+headers = {
+    'user-agent': 'Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36',
+    'accept': 'application/json, text/plain, */*',
+    'accept-language': 'en-US,en;q=0.9',
+    'origin': 'https://www.terabox.com',
+    'referer': 'https://www.terabox.com/'
+}
 
 class TeraboxFile():
 
@@ -15,10 +26,17 @@ class TeraboxFile():
     #--> Main control (get short_url, init authorization, and get root file)
     def search(self, url:str) -> None:
 
-        req : str = self.r.get(url, allow_redirects=True)
-        self.short_url : str = re.search(r'surl=([^ &]+)',str(req.url)).group(1)
-        self.getMainFile()
-        self.generateSign()
+        try:
+            logger.info(f"Searching URL: {url}")
+            req : str = self.r.get(url, allow_redirects=True)
+            self.short_url : str = re.search(r'surl=([^ &]+)',str(req.url)).group(1)
+            logger.info(f"Extracted short URL: {self.short_url}")
+            self.getMainFile()
+            self.generateSign()
+        except Exception as e:
+            logger.error(f"Error in search: {str(e)}")
+            self.result['status'] = 'failed'
+            self.result['error'] = str(e)
 
     #--> Generate sign & timestamp
     def generateSign(self) -> None:
@@ -34,19 +52,29 @@ class TeraboxFile():
             self.result['sign'] = sign
             self.result['timestamp'] = timestamp
             self.result['status'] = 'success'
-        except:
+            logger.info(f"Generated sign: {sign} with timestamp: {timestamp}")
+        except Exception as e:
+            logger.error(f"Error generating sign: {str(e)}")
             self.result['status'] = 'failed'
+            self.result['error'] = str(e)
 
     #--> Get payload (root / top layer / overall data) and init packing file information
     def getMainFile(self) -> None:
 
-        url: str = f'https://www.terabox.com/api/shorturlinfo?app_id=250528&shorturl=1{self.short_url}&root=1'
-        req : object = self.r.get(url, headers=self.headers).json()
-        all_file = self.packData(req, self.short_url)
-        if len(all_file):
-            self.result['shareid']   = req['shareid']
-            self.result['uk']        = req['uk']
-            self.result['list']      = all_file
+        try:
+            url: str = f'https://www.terabox.com/api/shorturlinfo?app_id=250528&shorturl=1{self.short_url}&root=1'
+            logger.info(f"Fetching main file info from: {url}")
+            req : object = self.r.get(url, headers=self.headers, timeout=10).json()
+            all_file = self.packData(req, self.short_url)
+            if len(all_file):
+                self.result['shareid']   = req['shareid']
+                self.result['uk']        = req['uk']
+                self.result['list']      = all_file
+                logger.info(f"Successfully got file info. ShareID: {req['shareid']}, UK: {req['uk']}")
+        except Exception as e:
+            logger.error(f"Error getting main file: {str(e)}")
+            self.result['status'] = 'failed'
+            self.result['error'] = str(e)
 
     #--> Get child file data recursively (if any) and init packing file information
     def getChildFile(self, short_url, path:str='', root:str='0') -> list[dict[str, any]]:
@@ -104,6 +132,7 @@ class TeraboxLink():
             'timestamp': str(timestamp),
             'fs_id': str(fs_id)
         }
+        logger.info(f"Initialized TeraboxLink with params: {self.params}")
 
     #--> Generate download link
     def generate(self) -> None:
@@ -111,17 +140,38 @@ class TeraboxLink():
         try:
             # Direct API call to TeraBox
             url = 'https://www.terabox.com/share/download'
-            response = self.r.get(url, params=self.params, headers=self.headers)
-            data = response.json()
+            logger.info(f"Generating download link from: {url}")
+            response = self.r.get(url, params=self.params, headers=self.headers, timeout=10)
+            logger.info(f"Response status code: {response.status_code}")
+            logger.info(f"Response content: {response.text[:200]}...")  # Log first 200 chars
             
+            data = response.json()
             if data.get('errno') == 0:
                 # Get direct download link
                 download_url = data.get('dlink')
                 self.result['download_link'] = download_url
                 self.result['status'] = 'success'
-        except Exception as e:
+                logger.info(f"Successfully generated download link: {download_url[:100]}...")
+            else:
+                error_msg = f"API Error: {data.get('errno')} - {data.get('errmsg', 'Unknown error')}"
+                logger.error(error_msg)
+                self.result['status'] = 'failed'
+                self.result['error'] = error_msg
+        except requests.exceptions.Timeout:
+            error_msg = "Request timed out"
+            logger.error(error_msg)
             self.result['status'] = 'failed'
-            self.result['message'] = str(e)
+            self.result['error'] = error_msg
+        except requests.exceptions.RequestException as e:
+            error_msg = f"Request failed: {str(e)}"
+            logger.error(error_msg)
+            self.result['status'] = 'failed'
+            self.result['error'] = error_msg
+        except Exception as e:
+            error_msg = f"Unexpected error: {str(e)}"
+            logger.error(error_msg)
+            self.result['status'] = 'failed'
+            self.result['error'] = error_msg
 
 class Test():
 
