@@ -128,7 +128,8 @@ class TeraboxLink():
             'sec-ch-ua-platform': '"Windows"',
             'sec-fetch-dest': 'empty',
             'sec-fetch-mode': 'cors',
-            'sec-fetch-site': 'same-origin'
+            'sec-fetch-site': 'same-origin',
+            'cookie': 'BAIDUID=1234567890:FG=1; BDUSS=1234567890'
         }
         self.result = {'status': 'failed', 'download_link': {}}
         
@@ -145,67 +146,21 @@ class TeraboxLink():
         }
         logger.info(f"Initialized TeraboxLink with params: {self.params}")
 
-    def get_verify_token(self) -> str:
-        try:
-            # Get verification token from TeraBox
-            verify_url = 'https://www.terabox.com/api/gettemplatevariable'
-            verify_params = {
-                'app_id': '250528',
-                'channel': 'dubox',
-                'clienttype': '0',
-                'web': '1'
-            }
-            
-            logger.info(f"Requesting verification token from: {verify_url}")
-            response = self.r.get(verify_url, params=verify_params, headers=self.headers, timeout=10)
-            logger.info(f"Verification token response status: {response.status_code}")
-            logger.info(f"Verification token response content: {response.text[:200]}...")
-            
-            if response.status_code != 200:
-                logger.error(f"Failed to get verification token. Status code: {response.status_code}")
-                return ''
-                
-            try:
-                data = response.json()
-                if data.get('errno') == 0:
-                    token = data.get('token', '')
-                    logger.info(f"Successfully got verification token: {token[:10]}...")
-                    return token
-                else:
-                    logger.error(f"API error getting verification token: {data.get('errno')} - {data.get('errmsg', 'Unknown error')}")
-                    return ''
-            except ValueError as e:
-                logger.error(f"Invalid JSON response from verification token endpoint: {str(e)}")
-                return ''
-                
-        except requests.exceptions.Timeout:
-            logger.error("Timeout while getting verification token")
-            return ''
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Request failed while getting verification token: {str(e)}")
-            return ''
-        except Exception as e:
-            logger.error(f"Unexpected error getting verification token: {str(e)}")
-            return ''
-
-    #--> Generate download link
     def generate(self) -> None:
-
         try:
-            # First get verification token
-            verify_token = self.get_verify_token()
-            if not verify_token:
-                # Try direct download without verification
-                logger.info("Attempting direct download without verification")
-                self.params.pop('verify_token', None)
-            else:
-                self.params['verify_token'] = verify_token
-            
+            # First try direct download
             url = 'https://www.terabox.com/share/download'
             logger.info(f"Generating download link from: {url}")
             
-            # First request to get verification
-            response = self.r.get(url, params=self.params, headers=self.headers, timeout=10)
+            # Add additional parameters for verification
+            download_params = self.params.copy()
+            download_params.update({
+                'web': '1',
+                'dp-logid': str(int(time.time() * 1000)),
+                'dp-logid2': str(int(time.time() * 1000))
+            })
+            
+            response = self.r.get(url, params=download_params, headers=self.headers, timeout=10)
             logger.info(f"Response status code: {response.status_code}")
             logger.info(f"Response content: {response.text[:200]}...")
             
@@ -223,37 +178,37 @@ class TeraboxLink():
                 self.result['status'] = 'success'
                 logger.info(f"Successfully generated download link: {download_url[:100]}...")
             elif data.get('errno') == 400310:  # Need verification
-                # Get verification code from response
-                verify_code = data.get('verify_code', '')
-                if verify_code:
-                    # Add verification code to params
-                    self.params['verify_code'] = verify_code
-                    
-                    # Second request with verification code
-                    response = self.r.get(url, params=self.params, headers=self.headers, timeout=10)
-                    try:
-                        data = response.json()
-                    except ValueError as e:
-                        logger.error(f"Invalid JSON response after verification: {str(e)}")
-                        self.result['status'] = 'failed'
-                        self.result['error'] = 'Invalid response after verification'
-                        return
-                    
-                    if data.get('errno') == 0:
-                        download_url = data.get('dlink')
+                # Try alternative download method
+                logger.info("Attempting alternative download method")
+                alt_url = 'https://www.terabox.com/api/download'
+                alt_params = {
+                    'app_id': '250528',
+                    'channel': 'dubox',
+                    'clienttype': '0',
+                    'sign': self.params['sign'],
+                    'timestamp': self.params['timestamp'],
+                    'web': '1',
+                    'dp-logid': str(int(time.time() * 1000)),
+                    'dp-logid2': str(int(time.time() * 1000))
+                }
+                
+                alt_response = self.r.get(alt_url, params=alt_params, headers=self.headers, timeout=10)
+                try:
+                    alt_data = alt_response.json()
+                    if alt_data.get('errno') == 0:
+                        download_url = alt_data.get('dlink')
                         self.result['download_link'] = download_url
                         self.result['status'] = 'success'
-                        logger.info(f"Successfully generated download link after verification: {download_url[:100]}...")
+                        logger.info(f"Successfully generated download link using alternative method: {download_url[:100]}...")
                     else:
-                        error_msg = f"API Error after verification: {data.get('errno')} - {data.get('errmsg', 'Unknown error')}"
+                        error_msg = f"Alternative method failed: {alt_data.get('errno')} - {alt_data.get('errmsg', 'Unknown error')}"
                         logger.error(error_msg)
                         self.result['status'] = 'failed'
                         self.result['error'] = error_msg
-                else:
-                    error_msg = "No verification code received"
-                    logger.error(error_msg)
+                except ValueError as e:
+                    logger.error(f"Invalid JSON response from alternative method: {str(e)}")
                     self.result['status'] = 'failed'
-                    self.result['error'] = error_msg
+                    self.result['error'] = 'Invalid response from alternative method'
             else:
                 error_msg = f"API Error: {data.get('errno')} - {data.get('errmsg', 'Unknown error')}"
                 logger.error(error_msg)
