@@ -134,29 +134,86 @@ class TeraboxLink():
         }
         logger.info(f"Initialized TeraboxLink with params: {self.params}")
 
+    def get_verify_token(self) -> str:
+        try:
+            # Get verification token from TeraBox
+            verify_url = 'https://www.terabox.com/api/gettemplatevariable'
+            verify_params = {
+                'app_id': '250528',
+                'channel': 'dubox',
+                'clienttype': '0',
+                'web': '1'
+            }
+            response = self.r.get(verify_url, params=verify_params, headers=self.headers, timeout=10)
+            data = response.json()
+            if data.get('errno') == 0:
+                return data.get('token', '')
+            return ''
+        except Exception as e:
+            logger.error(f"Error getting verify token: {str(e)}")
+            return ''
+
     #--> Generate download link
     def generate(self) -> None:
 
         try:
-            # Direct API call to TeraBox
+            # First get verification token
+            verify_token = self.get_verify_token()
+            if not verify_token:
+                self.result['status'] = 'failed'
+                self.result['error'] = 'Failed to get verification token'
+                return
+
+            # Add verification token to params
+            self.params['verify_token'] = verify_token
+            
             url = 'https://www.terabox.com/share/download'
             logger.info(f"Generating download link from: {url}")
+            
+            # First request to get verification
             response = self.r.get(url, params=self.params, headers=self.headers, timeout=10)
             logger.info(f"Response status code: {response.status_code}")
-            logger.info(f"Response content: {response.text[:200]}...")  # Log first 200 chars
+            logger.info(f"Response content: {response.text[:200]}...")
             
             data = response.json()
+            
             if data.get('errno') == 0:
-                # Get direct download link
                 download_url = data.get('dlink')
                 self.result['download_link'] = download_url
                 self.result['status'] = 'success'
                 logger.info(f"Successfully generated download link: {download_url[:100]}...")
+            elif data.get('errno') == 400310:  # Need verification
+                # Get verification code from response
+                verify_code = data.get('verify_code', '')
+                if verify_code:
+                    # Add verification code to params
+                    self.params['verify_code'] = verify_code
+                    
+                    # Second request with verification code
+                    response = self.r.get(url, params=self.params, headers=self.headers, timeout=10)
+                    data = response.json()
+                    
+                    if data.get('errno') == 0:
+                        download_url = data.get('dlink')
+                        self.result['download_link'] = download_url
+                        self.result['status'] = 'success'
+                        logger.info(f"Successfully generated download link after verification: {download_url[:100]}...")
+                    else:
+                        error_msg = f"API Error after verification: {data.get('errno')} - {data.get('errmsg', 'Unknown error')}"
+                        logger.error(error_msg)
+                        self.result['status'] = 'failed'
+                        self.result['error'] = error_msg
+                else:
+                    error_msg = "No verification code received"
+                    logger.error(error_msg)
+                    self.result['status'] = 'failed'
+                    self.result['error'] = error_msg
             else:
                 error_msg = f"API Error: {data.get('errno')} - {data.get('errmsg', 'Unknown error')}"
                 logger.error(error_msg)
                 self.result['status'] = 'failed'
                 self.result['error'] = error_msg
+                
         except requests.exceptions.Timeout:
             error_msg = "Request timed out"
             logger.error(error_msg)
