@@ -116,12 +116,23 @@ class TeraboxLink():
     #--> Initialization (requests, headers, payload, and result)
     def __init__(self, shareid:str, uk:str, sign:str, timestamp:str, fs_id:str) -> None:
 
-        self.r : object = requests.Session()
-        self.headers : dict[str,str] = headers
-        self.result : dict[str,dict] = {'status':'failed', 'download_link':{}}
-
-        #--> Parameters for direct API call
-        self.params : dict[str,any] = {
+        self.r = requests.Session()
+        self.headers = {
+            'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'accept': 'application/json, text/plain, */*',
+            'accept-language': 'en-US,en;q=0.9',
+            'origin': 'https://www.terabox.com',
+            'referer': 'https://www.terabox.com/',
+            'sec-ch-ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+            'sec-ch-ua-mobile': '?0',
+            'sec-ch-ua-platform': '"Windows"',
+            'sec-fetch-dest': 'empty',
+            'sec-fetch-mode': 'cors',
+            'sec-fetch-site': 'same-origin'
+        }
+        self.result = {'status': 'failed', 'download_link': {}}
+        
+        self.params = {
             'app_id': '250528',
             'channel': 'dubox',
             'product': 'share',
@@ -144,13 +155,37 @@ class TeraboxLink():
                 'clienttype': '0',
                 'web': '1'
             }
+            
+            logger.info(f"Requesting verification token from: {verify_url}")
             response = self.r.get(verify_url, params=verify_params, headers=self.headers, timeout=10)
-            data = response.json()
-            if data.get('errno') == 0:
-                return data.get('token', '')
+            logger.info(f"Verification token response status: {response.status_code}")
+            logger.info(f"Verification token response content: {response.text[:200]}...")
+            
+            if response.status_code != 200:
+                logger.error(f"Failed to get verification token. Status code: {response.status_code}")
+                return ''
+                
+            try:
+                data = response.json()
+                if data.get('errno') == 0:
+                    token = data.get('token', '')
+                    logger.info(f"Successfully got verification token: {token[:10]}...")
+                    return token
+                else:
+                    logger.error(f"API error getting verification token: {data.get('errno')} - {data.get('errmsg', 'Unknown error')}")
+                    return ''
+            except ValueError as e:
+                logger.error(f"Invalid JSON response from verification token endpoint: {str(e)}")
+                return ''
+                
+        except requests.exceptions.Timeout:
+            logger.error("Timeout while getting verification token")
+            return ''
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Request failed while getting verification token: {str(e)}")
             return ''
         except Exception as e:
-            logger.error(f"Error getting verify token: {str(e)}")
+            logger.error(f"Unexpected error getting verification token: {str(e)}")
             return ''
 
     #--> Generate download link
@@ -160,12 +195,11 @@ class TeraboxLink():
             # First get verification token
             verify_token = self.get_verify_token()
             if not verify_token:
-                self.result['status'] = 'failed'
-                self.result['error'] = 'Failed to get verification token'
-                return
-
-            # Add verification token to params
-            self.params['verify_token'] = verify_token
+                # Try direct download without verification
+                logger.info("Attempting direct download without verification")
+                self.params.pop('verify_token', None)
+            else:
+                self.params['verify_token'] = verify_token
             
             url = 'https://www.terabox.com/share/download'
             logger.info(f"Generating download link from: {url}")
@@ -175,7 +209,13 @@ class TeraboxLink():
             logger.info(f"Response status code: {response.status_code}")
             logger.info(f"Response content: {response.text[:200]}...")
             
-            data = response.json()
+            try:
+                data = response.json()
+            except ValueError as e:
+                logger.error(f"Invalid JSON response: {str(e)}")
+                self.result['status'] = 'failed'
+                self.result['error'] = 'Invalid response from server'
+                return
             
             if data.get('errno') == 0:
                 download_url = data.get('dlink')
@@ -191,7 +231,13 @@ class TeraboxLink():
                     
                     # Second request with verification code
                     response = self.r.get(url, params=self.params, headers=self.headers, timeout=10)
-                    data = response.json()
+                    try:
+                        data = response.json()
+                    except ValueError as e:
+                        logger.error(f"Invalid JSON response after verification: {str(e)}")
+                        self.result['status'] = 'failed'
+                        self.result['error'] = 'Invalid response after verification'
+                        return
                     
                     if data.get('errno') == 0:
                         download_url = data.get('dlink')
