@@ -14,7 +14,7 @@ from python.terabox2 import TeraboxFile as TF2, TeraboxLink as TL2, TeraboxSessi
 from python.terabox3 import TeraboxFile as TF3, TeraboxLink as TL3
 
 #--> Global Variable
-default_mode = 2
+default_mode = 3
 config : dict[str,any] = {
     'status'  : 'failed',
     'message' : 'The Terabox cookie is invalid, boss. Try reporting it to Me.',
