@@ -1,18 +1,18 @@
 import re, requests, hashlib, time
 import logging
-from urllib.parse import quote
+from urllib.parse import quote, urlparse, parse_qs
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-headers = {
-    'user-agent': 'Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36',
-    'accept': 'application/json, text/plain, */*',
-    'accept-language': 'en-US,en;q=0.9',
-    'origin': 'https://www.terabox.com',
-    'referer': 'https://www.terabox.com/'
-}
+def find_between(text, start, end):
+    try:
+        start_index = text.index(start) + len(start)
+        end_index = text.index(end, start_index)
+        return text[start_index:end_index]
+    except ValueError:
+        return None
 
 class TeraboxFile():
 
@@ -20,7 +20,23 @@ class TeraboxFile():
     def __init__(self) -> None:
 
         self.r : object = requests.Session()
-        self.headers : dict[str,str] = headers
+        self.headers : dict[str,str] = {
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+            'Accept-Language': 'en-IN,en-GB;q=0.9,en-US;q=0.8,en;q=0.7,hi;q=0.6',
+            'Connection': 'keep-alive',
+            'Cookie': 'csrfToken=x0h2WkCSJZZ_ncegDtpABKzt; browserid=Bx3OwxDFKx7eOi8np2AQo2HhlYs5Ww9S8GDf6Bg0q8MTw7cl_3hv7LEcgzk=; lang=en; TSID=pdZVCjBvomsN0LnvT407VJiaJZlfHlVy; __bid_n=187fc5b9ec480cfe574207; ndus=Y-ZNVKxteHuixZLS-xPAQRmqh5zukWbTHVjen34w; __stripe_mid=895ddb1a-fe7d-43fa-a124-406268fe0d0c36e2ae; ndut_fmt=FF870BBFA15F9038B3A39F5DDDF1188864768A8E63DC6AEC54785FCD371BB182',
+            'DNT': '1',
+            'Host': 'www.4funbox.com',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Sec-Fetch-User': '?1',
+            'Upgrade-Insecure-Requests': '1',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/113.0.0.0 Safari/537.36',
+            'sec-ch-ua': '"Google Chrome";v="113", "Chromium";v="113", "Not-A.Brand";v="24"',
+            'sec-ch-ua-mobile': '?0',
+            'sec-ch-ua-platform': '"Windows"'
+        }
         self.result : dict[str,any] = {'status':'failed', 'sign':'', 'timestamp':'', 'shareid':'', 'uk':'', 'list':[]}
 
     #--> Main control (get short_url, init authorization, and get root file)
@@ -28,11 +44,68 @@ class TeraboxFile():
 
         try:
             logger.info(f"Searching URL: {url}")
-            req : str = self.r.get(url, allow_redirects=True)
-            self.short_url : str = re.search(r'surl=([^ &]+)',str(req.url)).group(1)
-            logger.info(f"Extracted short URL: {self.short_url}")
-            self.getMainFile()
-            self.generateSign()
+            # First request to get jsToken and logid
+            response = self.r.get(url, headers=self.headers, allow_redirects=True)
+            response_text = response.text
+            
+            # Extract jsToken and logid
+            js_token = find_between(response_text, 'fn%28%22', '%22%29')
+            logid = find_between(response_text, 'dp-logid=', '&')
+            
+            if not js_token or not logid:
+                logger.error("Failed to extract jsToken or logid")
+                self.result['status'] = 'failed'
+                return
+                
+            logger.info(f"Extracted jsToken: {js_token[:10]}... and logid: {logid}")
+            
+            # Parse the URL to get surl
+            parsed_url = urlparse(response.url)
+            query_params = parse_qs(parsed_url.query)
+            surl = query_params.get('surl', [None])[0]
+            
+            if not surl:
+                logger.error("Failed to extract surl")
+                self.result['status'] = 'failed'
+                return
+                
+            # Get file list
+            list_params = {
+                'app_id': '250528',
+                'web': '1',
+                'channel': 'dubox',
+                'clienttype': '0',
+                'jsToken': js_token,
+                'dplogid': logid,
+                'page': '1',
+                'num': '20',
+                'order': 'time',
+                'desc': '1',
+                'site_referer': response.url,
+                'shorturl': surl,
+                'root': '1'
+            }
+            
+            list_response = self.r.get('https://www.4funbox.com/share/list', 
+                                     params=list_params, 
+                                     headers=self.headers)
+            
+            if list_response.status_code == 200:
+                data = list_response.json()
+                if 'list' in data and len(data['list']) > 0:
+                    file_info = data['list'][0]
+                    self.result['shareid'] = file_info.get('shareid', '')
+                    self.result['uk'] = file_info.get('uk', '')
+                    self.result['list'] = data['list']
+                    self.result['status'] = 'success'
+                    logger.info(f"Successfully got file info. ShareID: {self.result['shareid']}, UK: {self.result['uk']}")
+                else:
+                    logger.error("No files found in response")
+                    self.result['status'] = 'failed'
+            else:
+                logger.error(f"Failed to get file list. Status code: {list_response.status_code}")
+                self.result['status'] = 'failed'
+                
         except Exception as e:
             logger.error(f"Error in search: {str(e)}")
             self.result['status'] = 'failed'
@@ -118,18 +191,21 @@ class TeraboxLink():
 
         self.r = requests.Session()
         self.headers = {
-            'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'accept': 'application/json, text/plain, */*',
-            'accept-language': 'en-US,en;q=0.9',
-            'origin': 'https://www.terabox.com',
-            'referer': 'https://www.terabox.com/',
-            'sec-ch-ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+            'Accept-Language': 'en-IN,en-GB;q=0.9,en-US;q=0.8,en;q=0.7,hi;q=0.6',
+            'Connection': 'keep-alive',
+            'Cookie': 'csrfToken=x0h2WkCSJZZ_ncegDtpABKzt; browserid=Bx3OwxDFKx7eOi8np2AQo2HhlYs5Ww9S8GDf6Bg0q8MTw7cl_3hv7LEcgzk=; lang=en; TSID=pdZVCjBvomsN0LnvT407VJiaJZlfHlVy; __bid_n=187fc5b9ec480cfe574207; ndus=Y-ZNVKxteHuixZLS-xPAQRmqh5zukWbTHVjen34w; __stripe_mid=895ddb1a-fe7d-43fa-a124-406268fe0d0c36e2ae; ndut_fmt=FF870BBFA15F9038B3A39F5DDDF1188864768A8E63DC6AEC54785FCD371BB182',
+            'DNT': '1',
+            'Host': 'www.4funbox.com',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Sec-Fetch-User': '?1',
+            'Upgrade-Insecure-Requests': '1',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/113.0.0.0 Safari/537.36',
+            'sec-ch-ua': '"Google Chrome";v="113", "Chromium";v="113", "Not-A.Brand";v="24"',
             'sec-ch-ua-mobile': '?0',
-            'sec-ch-ua-platform': '"Windows"',
-            'sec-fetch-dest': 'empty',
-            'sec-fetch-mode': 'cors',
-            'sec-fetch-site': 'same-origin',
-            'cookie': 'BAIDUID=1234567890:FG=1; BDUSS=1234567890'
+            'sec-ch-ua-platform': '"Windows"'
         }
         self.result = {'status': 'failed', 'download_link': {}}
         
@@ -148,72 +224,49 @@ class TeraboxLink():
 
     def generate(self) -> None:
         try:
-            # First try direct download
-            url = 'https://www.terabox.com/share/download'
+            # First get the page to extract jsToken and logid
+            url = 'https://www.4funbox.com/share/download'
             logger.info(f"Generating download link from: {url}")
             
-            # Add additional parameters for verification
+            response = self.r.get(url, params=self.params, headers=self.headers, timeout=10)
+            response_text = response.text
+            
+            # Extract jsToken and logid
+            js_token = find_between(response_text, 'fn%28%22', '%22%29')
+            logid = find_between(response_text, 'dp-logid=', '&')
+            
+            if not js_token or not logid:
+                logger.error("Failed to extract jsToken or logid")
+                self.result['status'] = 'failed'
+                return
+                
+            # Add jsToken and logid to params
             download_params = self.params.copy()
             download_params.update({
-                'web': '1',
-                'dp-logid': str(int(time.time() * 1000)),
-                'dp-logid2': str(int(time.time() * 1000))
+                'jsToken': js_token,
+                'dplogid': logid,
+                'web': '1'
             })
             
-            response = self.r.get(url, params=download_params, headers=self.headers, timeout=10)
-            logger.info(f"Response status code: {response.status_code}")
-            logger.info(f"Response content: {response.text[:200]}...")
+            # Make the download request
+            download_response = self.r.get(url, params=download_params, headers=self.headers, timeout=10)
             
             try:
-                data = response.json()
+                data = download_response.json()
+                if data.get('errno') == 0:
+                    download_url = data.get('dlink')
+                    self.result['download_link'] = download_url
+                    self.result['status'] = 'success'
+                    logger.info(f"Successfully generated download link: {download_url[:100]}...")
+                else:
+                    error_msg = f"API Error: {data.get('errno')} - {data.get('errmsg', 'Unknown error')}"
+                    logger.error(error_msg)
+                    self.result['status'] = 'failed'
+                    self.result['error'] = error_msg
             except ValueError as e:
                 logger.error(f"Invalid JSON response: {str(e)}")
                 self.result['status'] = 'failed'
                 self.result['error'] = 'Invalid response from server'
-                return
-            
-            if data.get('errno') == 0:
-                download_url = data.get('dlink')
-                self.result['download_link'] = download_url
-                self.result['status'] = 'success'
-                logger.info(f"Successfully generated download link: {download_url[:100]}...")
-            elif data.get('errno') == 400310:  # Need verification
-                # Try alternative download method
-                logger.info("Attempting alternative download method")
-                alt_url = 'https://www.terabox.com/api/download'
-                alt_params = {
-                    'app_id': '250528',
-                    'channel': 'dubox',
-                    'clienttype': '0',
-                    'sign': self.params['sign'],
-                    'timestamp': self.params['timestamp'],
-                    'web': '1',
-                    'dp-logid': str(int(time.time() * 1000)),
-                    'dp-logid2': str(int(time.time() * 1000))
-                }
-                
-                alt_response = self.r.get(alt_url, params=alt_params, headers=self.headers, timeout=10)
-                try:
-                    alt_data = alt_response.json()
-                    if alt_data.get('errno') == 0:
-                        download_url = alt_data.get('dlink')
-                        self.result['download_link'] = download_url
-                        self.result['status'] = 'success'
-                        logger.info(f"Successfully generated download link using alternative method: {download_url[:100]}...")
-                    else:
-                        error_msg = f"Alternative method failed: {alt_data.get('errno')} - {alt_data.get('errmsg', 'Unknown error')}"
-                        logger.error(error_msg)
-                        self.result['status'] = 'failed'
-                        self.result['error'] = error_msg
-                except ValueError as e:
-                    logger.error(f"Invalid JSON response from alternative method: {str(e)}")
-                    self.result['status'] = 'failed'
-                    self.result['error'] = 'Invalid response from alternative method'
-            else:
-                error_msg = f"API Error: {data.get('errno')} - {data.get('errmsg', 'Unknown error')}"
-                logger.error(error_msg)
-                self.result['status'] = 'failed'
-                self.result['error'] = error_msg
                 
         except requests.exceptions.Timeout:
             error_msg = "Request timed out"
